@@ -43,10 +43,11 @@ type peer struct {
 	peerRoleAdvByPeer           bool
 	peerRoleRemote              uint8
 
-	vrf  *vrf.VRF
-	ipv4 *peerAddressFamily
-	ipv6 *peerAddressFamily
-
+	vrf             *vrf.VRF
+	ipv4            *peerAddressFamily
+	ipv6            *peerAddressFamily
+	lsspf           *peerAddressFamily
+	SeqNum          uint64
 	adjRIBInFactory adjRIBInFactoryI
 }
 
@@ -72,6 +73,7 @@ type PeerConfig struct {
 	PeerRoleStrictMode         bool
 	IPv4                       *AddressFamilyConfig
 	IPv6                       *AddressFamilyConfig
+	Lsspf                      *AddressFamilyConfig
 	VRF                        *vrf.VRF
 	Description                string
 }
@@ -198,7 +200,7 @@ type peerAddressFamily struct {
 }
 
 func (p *peer) addressFamily(afi uint16, safi uint8) *peerAddressFamily {
-	if safi != packet.SAFIUnicast {
+	if safi != packet.SAFIUnicast && safi != packet.SAFIBGPLSSPF {
 		return nil
 	}
 
@@ -207,6 +209,8 @@ func (p *peer) addressFamily(afi uint16, safi uint8) *peerAddressFamily {
 		return p.ipv4
 	case packet.AFIIPv6:
 		return p.ipv6
+	case packet.AFILS:
+		return p.lsspf
 	default:
 		return nil
 	}
@@ -333,6 +337,16 @@ func newPeer(c PeerConfig, server *bgpServer) (*peer, error) {
 			return nil, fmt.Errorf("no RIB for IPv6 unicast configured")
 		}
 	}
+	if c.Lsspf != nil {
+		p.lsspf = &peerAddressFamily{
+			rib:               c.VRF.IPv6UnicastRIB(),
+			importFilterChain: filterOrDefault(c.Lsspf.ImportFilterChain),
+			exportFilterChain: filterOrDefault(c.Lsspf.ExportFilterChain),
+			addPathReceive:    c.Lsspf.AddPathRecv,
+			addPathSend:       c.Lsspf.AddPathSend,
+		}
+		caps = append(caps, multiProtocolCapability(packet.AFILS, packet.SAFIBGPLSSPF))
+	}
 
 	// Activate Peer Role capability for eBGP neighbors if configured
 	if p.localASN != p.peerASN && peerRoleEnabled(c.PeerRole) {
@@ -360,7 +374,16 @@ func asn4Capability(c PeerConfig) packet.Capability {
 	}
 }
 
-func multiProtocolCapability(afi uint16) packet.Capability {
+func multiProtocolCapability(afi uint16, safi ...uint8) packet.Capability {
+	if len(safi) != 0 {
+		return packet.Capability{
+			Code: packet.MultiProtocolCapabilityCode,
+			Value: packet.MultiProtocolCapability{
+				AFI:  afi,
+				SAFI: safi[0],
+			},
+		}
+	}
 	return packet.Capability{
 		Code: packet.MultiProtocolCapabilityCode,
 		Value: packet.MultiProtocolCapability{

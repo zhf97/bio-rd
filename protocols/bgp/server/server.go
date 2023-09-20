@@ -179,16 +179,20 @@ func (b *bgpServer) incomingConnectionWorker() {
 		log.WithFields(log.Fields{
 			"peer": peerAddr,
 		}).Debug("Sending incoming TCP connection to fsm for peer")
-		fsm := NewActiveFSM(peer)
-		fsm.state = newActiveState(fsm)
-		fsm.startConnectRetryTimer()
+		if len(peer.fsms) != 0 {
+			peer.fsms[0].conCh <- c.Conn
+		} else {
+			fsm := NewPassiveFSM(peer, c.Conn)
+			fsm.state = newActiveState(fsm)
+			fsm.startConnectRetryTimer()
 
-		peer.fsmsMu.Lock()
-		peer.fsms = append(peer.fsms, fsm)
-		peer.fsmsMu.Unlock()
+			peer.fsmsMu.Lock()
+			peer.fsms = append(peer.fsms, fsm)
+			peer.fsmsMu.Unlock()
 
-		go fsm.run()
-		fsm.conCh <- c.Conn
+			go fsm.run()
+			fsm.conCh <- c.Conn
+		}
 	}
 }
 

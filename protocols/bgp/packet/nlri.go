@@ -21,6 +21,7 @@ type NLRI struct {
 	PathIdentifier uint32
 	LabelStack     []LabelStackEntry
 	Prefix         *bnet.Prefix
+	SPFValue       interface{}
 	Next           *NLRI
 }
 
@@ -29,7 +30,7 @@ func decodeNLRIs(buf *bytes.Buffer, length uint16, afi uint16, safi uint8, addPa
 	var eol *NLRI
 	var nlri *NLRI
 	var err error
-	var consumed uint8
+	var consumed uint16
 	p := uint16(0)
 
 	for p < length {
@@ -52,10 +53,13 @@ func decodeNLRIs(buf *bytes.Buffer, length uint16, afi uint16, safi uint8, addPa
 	return ret, nil
 }
 
-func decodeNLRI(buf *bytes.Buffer, afi uint16, safi uint8, addPath bool) (*NLRI, uint8, error) {
+func decodeNLRI(buf *bytes.Buffer, afi uint16, safi uint8, addPath bool) (*NLRI, uint16, error) {
 	nlri := &NLRI{}
-
-	consumed := uint8(0)
+	consumed := uint16(0)
+	if afi == AFILS && safi == SAFIBGPLSSPF {
+		nlri, consumed, err := decodeSPFTLV(buf)
+		return nlri, consumed, err
+	}
 
 	if addPath {
 		err := decode.Decode(buf, []interface{}{
@@ -96,7 +100,7 @@ func decodeNLRI(buf *bytes.Buffer, afi uint16, safi uint8, addPath bool) (*NLRI,
 	bytes := make([]byte, numBytes)
 
 	r, err := buf.Read(bytes)
-	consumed += uint8(r)
+	consumed += uint16(r)
 	if err != nil {
 		return nil, consumed, err
 	}
@@ -113,8 +117,12 @@ func decodeNLRI(buf *bytes.Buffer, afi uint16, safi uint8, addPath bool) (*NLRI,
 	return nlri, consumed, nil
 }
 
-func (n *NLRI) serialize(buf *bytes.Buffer, addPath bool, safi uint8) uint8 {
+func (n *NLRI) serialize(buf *bytes.Buffer, addPath bool, afi uint16, safi uint8) uint8 {
 	numBytes := uint8(0)
+	if afi == AFILS && safi == SAFIBGPLSSPF {
+		numBytes_ := seralizeSPFTLV(buf, n.SPFValue)
+		return uint8(numBytes_)
+	}
 
 	if addPath {
 		buf.Write(convert.Uint32Byte(n.PathIdentifier))

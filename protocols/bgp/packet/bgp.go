@@ -82,6 +82,7 @@ const (
 	AS4AggregatorAttr            = 18
 	LargeCommunitiesAttr         = 32
 	OnlyToCustomerAttr           = 35
+	BGPLSAttr                    = 29
 
 	// ORIGIN values
 	IGP        = 0
@@ -101,10 +102,12 @@ const (
 	// Address Familiy Identifiers
 	AFIIPv4 = 1
 	AFIIPv6 = 2
+	AFILS   = 16388
 
 	// Sub-Address Familiy Identifiers
 	SAFIUnicast        = 1
 	SAFILabeledUnicast = 4
+	SAFIBGPLSSPF       = 80
 
 	// Capabilities
 	CapabilitiesParamType       = 2
@@ -187,6 +190,8 @@ func AFIName(afi uint16) string {
 		return "IPv4"
 	case AFIIPv6:
 		return "IPv6"
+	case AFILS:
+		return "BGP-LS"
 	default:
 		return "Unknown AFI"
 	}

@@ -272,6 +272,36 @@ func (u *UpdateSender) bgpUpdateMultiProtocol(pfxs []*bnet.Prefix, pa *packet.Pa
 	}
 }
 
+func (u *UpdateSender) BgpUpdateMultiProtocolLSSPF(NLRI *packet.NLRI, LS *packet.LinkState, pa *packet.PathAttribute) {
+	pa, nextHop := u.copyAttributesWithoutNextHop(pa)
+
+	attrs_nlri := &packet.PathAttribute{
+		TypeCode: packet.MultiProtocolReachNLRIAttr,
+		Value: packet.MultiProtocolReachNLRI{
+			AFI:     u.addressFamily.afi,
+			SAFI:    u.addressFamily.safi,
+			NextHop: nextHop,
+			NLRI:    NLRI,
+		},
+	}
+	attrs_LSAttr := &packet.PathAttribute{
+		TypeCode: packet.BGPLSAttr,
+		Value:    packet.LinkStateAttrs{LinkState: LS},
+	}
+	attrs_nlri.Next = attrs_LSAttr
+	attrs_LSAttr.Next = pa
+	atomic.AddUint64(&u.fsm.lsspf.SeqNum, 1)
+	atomic.AddUint64(&u.fsm.counters.updatesSent, 1)
+	err := serializeAndSendUpdate(u.fsm.con, &packet.BGPUpdate{
+		PathAttributes: attrs_nlri,
+		SAFI:           u.addressFamily.safi,
+	}, u.options)
+	if err != nil {
+		log.Errorf("Failed to serialize and send: %v", err)
+	}
+
+}
+
 func (u *UpdateSender) nlriForPrefixes(pfxs []*bnet.Prefix, pathID uint32) *packet.NLRI {
 	var prev, res *packet.NLRI
 	for _, pfx := range pfxs {
@@ -375,7 +405,23 @@ func (u *UpdateSender) withdrawPrefixMultiProtocol(out io.Writer, pfx *bnet.Pref
 			},
 		},
 	}
+	u.fsm.peer.SeqNum++
 
+	return serializeAndSendUpdate(out, update, u.options)
+}
+
+func (u *UpdateSender) WithdrawMultiProtocolLSSPF(out io.Writer, NLRI *packet.NLRI, p *route.Path) error {
+	update := &packet.BGPUpdate{
+		PathAttributes: &packet.PathAttribute{
+			TypeCode: packet.MultiProtocolUnreachNLRIAttr,
+			Value: packet.MultiProtocolUnreachNLRI{
+				AFI:  u.addressFamily.afi,
+				SAFI: u.addressFamily.safi,
+				NLRI: NLRI,
+			},
+		},
+	}
+	atomic.AddUint64(&u.fsm.lsspf.SeqNum, 1)
 	return serializeAndSendUpdate(out, update, u.options)
 }
 

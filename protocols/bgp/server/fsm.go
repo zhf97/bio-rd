@@ -73,6 +73,7 @@ type FSM struct {
 	ribsInitialized bool
 	ipv4Unicast     *fsmAddressFamily
 	ipv6Unicast     *fsmAddressFamily
+	lsspf           *fsmAddressFamily
 
 	supports4OctetASN bool
 
@@ -88,7 +89,7 @@ type FSM struct {
 }
 
 // NewPassiveFSM initiates a new passive FSM
-func NewPassiveFSM(peer *peer, con *net.TCPConn) *FSM {
+func NewPassiveFSM(peer *peer, con net.Conn) *FSM {
 	fsm := newFSM(peer)
 	fsm.con = con
 	fsm.state = newIdleState(fsm)
@@ -99,6 +100,7 @@ func NewPassiveFSM(peer *peer, con *net.TCPConn) *FSM {
 func NewActiveFSM(peer *peer) *FSM {
 	fsm := newFSM(peer)
 	fsm.active = true
+	fsm.local = peer.localAddr.ToNetIP()
 	fsm.state = newIdleState(fsm)
 	return fsm
 }
@@ -123,6 +125,9 @@ func newFSM(peer *peer) *FSM {
 
 	if peer.ipv6 != nil {
 		f.ipv6Unicast = newFSMAddressFamily(packet.AFIIPv6, packet.SAFIUnicast, peer.ipv6, f)
+	}
+	if peer.lsspf != nil {
+		f.lsspf = newFSMAddressFamily(packet.AFILS, packet.SAFIBGPLSSPF, peer.lsspf, f)
 	}
 
 	return f
@@ -153,7 +158,7 @@ func (fsm *FSM) updateLastUpdateOrKeepalive() {
 }
 
 func (fsm *FSM) addressFamily(afi uint16, safi uint8) *fsmAddressFamily {
-	if safi != packet.SAFIUnicast {
+	if safi != packet.SAFIUnicast && safi != packet.SAFIBGPLSSPF {
 		return nil
 	}
 
@@ -162,6 +167,12 @@ func (fsm *FSM) addressFamily(afi uint16, safi uint8) *fsmAddressFamily {
 		return fsm.ipv4Unicast
 	case packet.AFIIPv6:
 		return fsm.ipv6Unicast
+	case packet.AFILS:
+		if safi == packet.SAFIBGPLSSPF {
+			return fsm.lsspf
+		} else {
+			return nil
+		}
 	default:
 		return nil
 	}

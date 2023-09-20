@@ -133,7 +133,7 @@ func (l *Listener) AcceptTCP() (ConnI, error) {
 		raddr.IP = x.Addr[:]
 		raddr.Port = x.Port
 	case *unix.SockaddrInet6:
-		x := sa.(*unix.SockaddrInet4)
+		x := sa.(*unix.SockaddrInet6)
 		raddr.IP = x.Addr[:]
 		raddr.Port = x.Port
 	}

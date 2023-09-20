@@ -158,6 +158,10 @@ func decodePathAttr(buf *bytes.Buffer, opt *DecodeOptions) (pa *PathAttribute, c
 		if err := pa.decodeLargeCommunities(buf); err != nil {
 			return nil, consumed, fmt.Errorf("failed to decode large communities: %w", err)
 		}
+	case BGPLSAttr:
+		if err := pa.decodeBGPLSAttr(buf, opt); err != nil {
+			return nil, consumed, fmt.Errorf("failed to decode BGPLS Attr: %w", err)
+		}
 	default:
 		if err := pa.decodeUnknown(buf); err != nil {
 			return nil, consumed, fmt.Errorf("failed to decode unknown attribute: %w", err)
@@ -178,6 +182,25 @@ func (pa *PathAttribute) decodeMultiProtocolReachNLRI(buf *bytes.Buffer, opt *De
 	}
 
 	nlri, err := deserializeMultiProtocolReachNLRI(b, opt)
+	if err != nil {
+		return fmt.Errorf("unable to decode MP_REACH_NLRI: %w", err)
+	}
+
+	pa.Value = nlri
+	return nil
+}
+
+func (pa *PathAttribute) decodeBGPLSAttr(buf *bytes.Buffer, opt *DecodeOptions) error {
+	b := make([]byte, pa.Length)
+	n, err := buf.Read(b)
+	if err != nil {
+		return fmt.Errorf("unable to read %d bytes from buffer: %w", pa.Length, err)
+	}
+	if n != int(pa.Length) {
+		return fmt.Errorf("unable to read %d bytes from buffer, only got %d bytes", pa.Length, n)
+	}
+
+	nlri, err := deserializeLinkState(b)
 	if err != nil {
 		return fmt.Errorf("unable to decode MP_REACH_NLRI: %w", err)
 	}
@@ -536,6 +559,8 @@ func (pa *PathAttribute) Serialize(buf *bytes.Buffer, opt *EncodeOptions) uint16
 		pathAttrLen = uint16(pa.serializeOriginatorID(buf))
 	case ClusterListAttr:
 		pathAttrLen = uint16(pa.serializeClusterList(buf))
+	case BGPLSAttr:
+		pathAttrLen = uint16(pa.serializBGPLSAttr(buf, opt))
 	default:
 		pathAttrLen = pa.serializeUnknownAttribute(buf)
 	}
@@ -795,6 +820,16 @@ func (pa *PathAttribute) serializeUnknownAttribute(buf *bytes.Buffer) uint16 {
 
 func (pa *PathAttribute) serializeMultiProtocolReachNLRI(buf *bytes.Buffer, opt *EncodeOptions) uint16 {
 	v := pa.Value.(MultiProtocolReachNLRI)
+	pa.Optional = true
+
+	tempBuf := bytes.NewBuffer(nil)
+	v.serialize(tempBuf, opt)
+
+	return pa.serializeGeneric(tempBuf.Bytes(), buf)
+}
+
+func (pa *PathAttribute) serializBGPLSAttr(buf *bytes.Buffer, opt *EncodeOptions) uint16 {
+	v := pa.Value.(LinkStateAttrs)
 	pa.Optional = true
 
 	tempBuf := bytes.NewBuffer(nil)

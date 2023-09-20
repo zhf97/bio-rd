@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	bnet "github.com/bio-routing/bio-rd/net"
 	"github.com/bio-routing/bio-rd/protocols/bgp/packet"
 	"github.com/bio-routing/bio-rd/util/log"
 )
@@ -26,8 +27,49 @@ func (s establishedState) run() (state, string) {
 		if err != nil {
 			return newCeaseState(), fmt.Sprintf("Init failed: %v", err)
 		}
+		// TODO: send NLRI to Rib_out
+		as_tlv := packet.SubTLV{Value: packet.ASTlv(s.fsm.peer.localASN), Type: packet.BGP_LS_AS}
+		router_id_tlv := packet.SubTLV{Type: packet.BGP_ROUTER_ID, Value: packet.BGPRID(bnet.IPv4(s.fsm.peer.routerID))}
+		as_tlv.Next = &router_id_tlv
+		NodeNLRI := &packet.Node{Type: packet.NodeNLRI, ProtocolID: 4, Identifier: 0, LocalNodeDescriptor: &packet.NodeDescriptor{Type: packet.LocalNode, Value: &as_tlv}}
+		NLRI := &packet.NLRI{SPFValue: NodeNLRI}
+		LSAttr := packet.LinkState{Type: packet.LSSPFCap, Value: &packet.SPFCap{SPFCap: 0}}
+		LSAttr.Next = &packet.LinkState{Type: packet.LSSeqNum, Value: &packet.SequenceNumber{SequenceNumber: atomic.LoadUint64(&s.fsm.lsspf.SeqNum)}}
+		pa, _ := packet.PathAttributesLSSPF(bnet.IPv4(s.fsm.peer.routerID), !s.fsm.peer.isEBGP(), s.fsm.peer.localASN)
+		s.fsm.lsspf.updateSender.BgpUpdateMultiProtocolLSSPF(NLRI, &LSAttr, pa)
+		// send this peer to others
+		peerM := s.fsm.peer.server.peers
+		peerM.peersMu.RLock()
+		n := &packet.NLRI{}
+		for _, v := range peerM.peers {
+			rrouter_id_tlv := packet.SubTLV{Value: packet.BGPRID(bnet.IPv4((v.fsms[0].neighborID))), Type: packet.BGP_ROUTER_ID}
+			ras_tlv := packet.SubTLV{Value: packet.ASTlv(v.peerASN), Type: packet.BGP_LS_AS}
+			ras_tlv.Next = &rrouter_id_tlv
+			link := packet.SubTLV{Value: packet.IPAddr(*v.localAddr), Type: packet.IPv6Addr}
+			link.Next = &packet.SubTLV{Value: packet.IPAddr(*v.addr), Type: packet.IPv6NeiAddr}
+			LinkNLRI := &packet.Link{Type: packet.LinkNLRI, ProtocolID: 4, Identifier: 0, LocalNodeDescriptor: &packet.NodeDescriptor{Type: packet.LocalNode, Value: &as_tlv}, RemoteNodeDescriptor: &packet.NodeDescriptor{Type: packet.RemoteNode, Value: &ras_tlv}, LinkDescriptor: &link}
+			if n.SPFValue == nil {
+				n.SPFValue = LinkNLRI
+			} else {
+				n.Next = &packet.NLRI{SPFValue: LinkNLRI}
+			}
+		}
+		peerM.peersMu.RUnlock()
+		LSAttr = packet.LinkState{Type: packet.LSMetric, Value: &packet.Metric{Metric: 10}}
+		LSAttr.Next = &packet.LinkState{Type: packet.LSSeqNum, Value: &packet.SequenceNumber{SequenceNumber: atomic.LoadUint64(&s.fsm.lsspf.SeqNum)}}
+		LSAttr.Next.Next = &packet.LinkState{Type: packet.LSIPv6PfxLen, Value: &packet.PfxLen{PfxLen: 64}}
+		pa, _ = packet.PathAttributesLSSPF(bnet.IPv4(s.fsm.peer.routerID), !s.fsm.peer.isEBGP(), s.fsm.peer.localASN)
+		s.fsm.lsspf.updateSender.BgpUpdateMultiProtocolLSSPF(n, &LSAttr, pa)
+		as_tlv = packet.SubTLV{Value: packet.ASTlv(s.fsm.peer.localASN), Type: packet.BGP_LS_AS}
+		router_id_tlv = packet.SubTLV{Type: packet.BGP_ROUTER_ID, Value: packet.BGPRID(bnet.IPv4(s.fsm.peer.routerID))}
+		as_tlv.Next = &router_id_tlv
+		ip, _ := bnet.IPFromString("a::1")
+		NLRI = &packet.NLRI{SPFValue: &packet.Prefix{Type: packet.IPv6PrefixNLRI, ProtocolID: 4, Identifier: 0, LocalNodeDescriptor: &packet.NodeDescriptor{Type: packet.LocalNode, Value: &as_tlv}, PrefixDescriptor: &packet.SubTLV{Type: packet.IPReachabilityInformation, Value: packet.IPReachability(bnet.NewPfx(ip, 64))}}}
+		LSAttr = packet.LinkState{Type: packet.LSPrefixMetric, Value: &packet.PrefixMetric{PrefixMetric: 10}}
+		LSAttr.Next = &packet.LinkState{Type: packet.LSSeqNum, Value: &packet.SequenceNumber{SequenceNumber: atomic.LoadUint64(&s.fsm.lsspf.SeqNum)}}
+		pa, _ = packet.PathAttributesLSSPF(bnet.IPv4(s.fsm.peer.routerID), !s.fsm.peer.isEBGP(), s.fsm.peer.localASN)
+		s.fsm.lsspf.updateSender.BgpUpdateMultiProtocolLSSPF(NLRI, &LSAttr, pa)
 	}
-
 	keepaliveTimerC := make(<-chan time.Time)
 	if s.fsm.keepaliveTimer != nil {
 		keepaliveTimerC = s.fsm.keepaliveTimer.C
@@ -72,6 +114,9 @@ func (s *establishedState) init() error {
 
 	if s.fsm.ipv6Unicast != nil {
 		s.fsm.ipv6Unicast.init()
+	}
+	if s.fsm.lsspf != nil {
+		s.fsm.lsspf.init()
 	}
 
 	s.fsm.ribsInitialized = true
@@ -189,10 +234,13 @@ func (s *establishedState) update(u *packet.BGPUpdate, bmpPostPolicy bool, times
 	if s.fsm.ipv6Unicast != nil {
 		s.fsm.ipv6Unicast.processUpdate(u, bmpPostPolicy, timestemp)
 	}
+	if s.fsm.lsspf != nil {
+		s.fsm.lsspf.processUpdate(u, bmpPostPolicy, timestemp)
+	}
 
 	afi, safi := s.updateAddressFamily(u)
 
-	if safi != packet.SAFIUnicast {
+	if safi != packet.SAFIUnicast && safi != packet.SAFIBGPLSSPF {
 		// only unicast support, so other SAFIs are ignored
 		return newEstablishedState(s.fsm), s.fsm.reason
 	}
@@ -207,7 +255,6 @@ func (s *establishedState) update(u *packet.BGPUpdate, bmpPostPolicy bool, times
 		if s.fsm.ipv6Unicast == nil {
 			log.Info("Received update for family IPv6 unicast, but this family is not configured.")
 		}
-
 	}
 
 	return newEstablishedState(s.fsm), s.fsm.reason

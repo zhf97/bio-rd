@@ -292,6 +292,7 @@ func TestNLRISerialize(t *testing.T) {
 		nlri     *NLRI
 		addPath  bool
 		safi     uint8
+		afi      uint16
 		expected []byte
 	}{
 		{
@@ -375,7 +376,7 @@ func TestNLRISerialize(t *testing.T) {
 
 	for _, test := range tests {
 		buf := bytes.NewBuffer(nil)
-		test.nlri.serialize(buf, test.addPath, test.safi)
+		test.nlri.serialize(buf, test.addPath, test.afi, test.safi)
 		res := buf.Bytes()
 		assert.Equal(t, test.expected, res, test.name)
 	}

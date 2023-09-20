@@ -200,7 +200,7 @@ func (s *openSentState) processCapability(cap packet.Capability) {
 }
 
 func (s *openSentState) processMultiProtocolCapability(cap packet.MultiProtocolCapability) {
-	if cap.SAFI != packet.SAFIUnicast {
+	if cap.SAFI != packet.SAFIUnicast && cap.SAFI != packet.SAFIBGPLSSPF {
 		return
 	}
 
